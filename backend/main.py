@@ -222,6 +222,7 @@ def ask(req: AskRequest) -> AskResponse:
 
     # Retrieval (skipped in no-retrieval ablation).
     retrieved: list[dict] = []
+    retriever = None
     if use_retrieval:
         retriever = get_retriever(
             chunking, CFG["embedding"]["default"]

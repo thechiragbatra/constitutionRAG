@@ -15,6 +15,7 @@ uvicorn
 python-multipart
 transformers
 torch
+mangum
 
 # Frontend
 streamlit

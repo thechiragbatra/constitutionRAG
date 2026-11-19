@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Constitution of India — RAG QA</title>
+<meta name="description" content="Retrieval-Augmented QA over the Constitution of India with Article citations">
+<style>
+  /* ============================================================
+     CSS VARIABLES — Indian tricolour palette
+     ============================================================ */
+  :root {
+    --saffron: #FF9933;
+    --saffron-dark: #E68A2B;
+    --saffron-light: #FFB86B;
+    --white: #FFFFFF;
+    --emerald: #138808;
+    --emerald-light: #2E7D32;
+    --emerald-glow: rgba(19, 136, 8, 0.15);
+    --navy: #000080;
+    --ink: #1A1A1A;
+    --muted: #666666;
+    --border: rgba(19, 136, 8, 0.2);
+    --bg-gradient: linear-gradient(135deg, #f0f7ff 0%, #e8f5e9 50%, #fff4e0 100%);
+    --glass: rgba(255, 255, 255, 0.7);
+    --glass-border: rgba(255, 255, 255, 0.9);
+  }
+
+  /* ============================================================
+     RESET & BASE
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg-gradient);
+    background-attachment: fixed;
+    color: var(--ink);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ============================================================
+     ANIMATED BACKGROUND — moving tricolour waves
+     ============================================================ */
+  .bg-waves {
+    position: fixed;
+    top: 0; left: 0; width: 100vw; height: 100vh;
+    z-index: -1;
+    overflow: hidden;
+  }
+  .wave {
+    position: absolute;
+    width: 200%; height: 200%;
+    background: linear-gradient(
+      var(--saffron) 0%,
+      var(--saffron) 33%,
+      var(--white) 33%,
+      var(--white) 66%,
+      var(--emerald) 66%,
+      var(--emerald) 100%
+    );
+    opacity: 0.06;
+    animation: waveMove 20s linear infinite;
+  }
+  .wave:nth-child(1) { top: -10%; left: -50%; animation-delay: 0s; }
+  .wave:nth-child(2) { top: -20%; left: -30%; animation-delay: -5s; animation-direction: reverse; }
+  .wave:nth-child(3) { top: -15%; left: -70%; animation-delay: -10s; }
+
+  @keyframes waveMove {
+    0% { transform: translate(0, 0) rotate(0deg); }
+    100% { transform: translate(50px, 100px) rotate(360deg); }
+  }
+
+  /* Floating particles */
+  .particle {
+    position: absolute;
+    border-radius: 50%;
+    background: var(--emerald);
+    opacity: 0;
+    animation: floatParticle 8s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes floatParticle {
+    0%, 100% { transform: translateY(0) translateX(0); opacity: 0; }
+    50% { transform: translateY(-30px) translateX(20px); opacity: 0.4; }
+  }
+
+  /* ============================================================
+     TRICOLOUR HEADER
+     ============================================================ */
+  .tricolor-header {
+    position: fixed;
+    top: 0; left: 0; width: 100%;
+    height: 10px;
+    z-index: 1000;
+    display: flex;
+  }
+  .tricolor-header .band { flex: 1; height: 100%; }
+  .tricolor-header .saffron { background: var(--saffron); }
+  .tricolor-header .white { background: var(--white); }
+  .tricolor-header .emerald { background: var(--emerald); }
+
+  /* ============================================================
+     LAYOUT
+     ============================================================ */
+  .app {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 90px 20px 40px;
+  }
+
+  /* ============================================================
+     HEADER / TITLE
+     ============================================================ */
+  .header-content {
+    text-align: center;
+    margin-bottom: 3rem;
+    animation: fadeInDown 1s ease-out;
+  }
+  @keyframes fadeInDown {
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .site-title {
+    font-size: 2.5rem;
+    font-weight: 800;
+    color: var(--emerald);
+    letter-spacing: 0.5px;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  .site-title span { color: var(--saffron-dark); }
+  .site-subtitle {
+    font-size: 1.1rem;
+    color: var(--muted);
+    font-weight: 400;
+  }
+
+  /* ============================================================
+     GLASSMORPHISM CARD
+     ============================================================ */
+  .glass-card {
+    background: var(--glass);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+    animation: fadeInUp 0.8s ease-out;
+  }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ============================================================
+     SIDEBAR SETTINGS
+     ============================================================ */
+  .settings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .setting-item {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+  }
+  .setting-item label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--emerald);
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .setting-item select,
+  .setting-item input {
+    width: 100%;
+    padding: 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    background: var(--white);
+    color: var(--ink);
+  }
+  .setting-item input[type="checkbox"] {
+    width: auto;
+    margin-right: 0.5rem;
+    accent-color: var(--emerald);
+  }
+  .setting-item-flex {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  /* ============================================================
+     QUESTION AREA
+     ============================================================ */
+  .question-area {
+    position: relative;
+    margin-bottom: 2rem;
+  }
+  #questionInput {
+    width: 100%;
+    padding: 1rem 1.5rem;
+    font-size: 1.1rem;
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    background: var(--white);
+    color: var(--ink);
+    outline: none;
+    transition: all 0.3s ease;
+  }
+  #questionInput:focus {
+    border-color: var(--emerald);
+    box-shadow: 0 0 0 4px var(--emerald-glow);
+  }
+  #askBtn {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 0.85rem 1.5rem;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--white);
+    background: var(--emerald);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(19, 136, 8, 0.3);
+  }
+  #askBtn:hover {
+    background: var(--emerald-light);
+    transform: translateY(-50%) scale(1.05);
+  }
+  #askBtn:disabled {
+    background: var(--muted);
+    cursor: not-allowed;
+    transform: none;
+  }
+  #askBtn.loading {
+    background: var(--saffron-dark);
+    animation: pulseBtn 1.5s infinite;
+  }
+  @keyframes pulseBtn {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  .example-chips {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+  }
+  .example-chip {
+    padding: 0.5rem 1rem;
+    border: 1.5px solid var(--saffron);
+    border-radius: 20px;
+    background: var(--white);
+    color: var(--saffron-dark);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .example-chip:hover {
+    background: var(--saffron);
+    color: var(--white);
+    transform: translateY(-2px);
+  }
+
+  /* ============================================================
+     BANNERS
+     ============================================================ */
+  .banner {
+    padding: 1rem 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    animation: slideIn 0.5s ease-out;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  .banner.abstain {
+    background: linear-gradient(90deg, var(--saffron), var(--saffron-light));
+    color: #4A3700;
+    border: 1px solid var(--saffron-dark);
+  }
+  .banner.found {
+    background: linear-gradient(90deg, var(--emerald), var(--emerald-light));
+    color: var(--white);
+    border: 1px solid rgba(255,255,255,0.3);
+  }
+  .banner .icon { font-size: 1.5rem; }
+
+  /* ============================================================
+     ANSWER CARD
+     ============================================================ */
+  .answer-card {
+    background: linear-gradient(135deg, var(--white) 0%, #F1F8F2 100%);
+    border: 1px solid var(--border);
+    border-left: 6px solid var(--emerald);
+    border-radius: 16px;
+    padding: 2rem;
+    margin-bottom: 1.5rem;
+    line-height: 1.7;
+    font-size: 1.05rem;
+    animation: fadeIn 0.6s ease-out;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .answer-card strong { color: var(--emerald); }
+
+  /* ============================================================
+     CITATION CHIPS
+     ============================================================ */
+  .chips-label {
+    font-weight: 700;
+    color: var(--emerald);
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: #F1F8F2;
+    color: var(--emerald);
+    border: 1.5px solid var(--emerald);
+    border-radius: 24px;
+    padding: 0.4rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+  }
+  .chip:hover {
+    background: var(--emerald);
+    color: var(--white);
+    transform: scale(1.05);
+  }
+  .chip:active { transform: scale(0.95); }
+
+  /* ============================================================
+     FLAGGED NOTE
+     ============================================================ */
+  .flagged-note {
+    background: #FFF7ED;
+    border: 1px dashed var(--saffron);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+    color: #4A3700;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  /* ============================================================
+     RETRIEVED CHUNKS
+     ============================================================ */
+  .chunks-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--emerald);
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .chunk-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+    transition: all 0.3s ease;
+    animation: slideUpChunk 0.4s ease-out both;
+  }
+  @keyframes slideUpChunk {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .chunk-card:hover {
+    border-color: var(--emerald-light);
+    box-shadow: 0 6px 20px rgba(19, 136, 8, 0.1);
+    transform: translateY(-2px);
+  }
+  .chunk-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.6rem;
+    font-size: 0.85rem;
+  }
+  .chunk-rank {
+    background: var(--emerald);
+    color: var(--white);
+    font-size: 0.75rem;
+    font-weight: 800;
+    padding: 0.15rem 0.6rem;
+    border-radius: 6px;
+  }
+  .chunk-arts { color: var(--navy); font-weight: 700; }
+  .chunk-score { color: var(--muted); font-family: monospace; font-size: 0.8rem; }
+  .chunk-part { color: var(--muted); font-size: 0.8rem; }
+  .chunk-text {
+    color: var(--ink);
+    line-height: 1.6;
+    font-size: 0.95rem;
+  }
+
+  /* ============================================================
+     FOOTER META
+     ============================================================ */
+  .footer-meta {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+
+  /* ============================================================
+     TOAST NOTIFICATION
+     ============================================================ */
+  #toast {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: var(--ink);
+    color: var(--white);
+    padding: 1rem 1.5rem;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    z-index: 2000;
+    opacity: 0;
+    transition: all 0.3s ease;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  }
+  #toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+
+  /* ============================================================
+     LOADING SPINNER
+     ============================================================ */
+  .spinner {
+    width: 24px; height: 24px;
+    border: 3px solid rgba(19,136,8,0.2);
+    border-top-color: var(--emerald);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 0.5rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============================================================
+     MODAL — Article detail
+     ============================================================ */
+  #articleModal {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(4px);
+    z-index: 3000;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.3s ease;
+  }
+  #articleModal.show { display: flex; }
+  .modal-content {
+    background: var(--white);
+    border-radius: 20px;
+    padding: 2rem;
+    max-width: 600px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+    animation: slideUpModal 0.4s ease;
+  }
+  @keyframes slideUpModal {
+    from { opacity: 0; transform: translateY(40px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .modal-close {
+    position: absolute;
+    top: 1.5rem; right: 1.5rem;
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .modal-title {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--emerald);
+    margin-bottom: 0.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .modal-part {
+    font-size: 0.9rem;
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .modal-text {
+    line-height: 1.7;
+    font-size: 1rem;
+    color: var(--ink);
+    white-space: pre-wrap;
+  }
+
+  /* ============================================================
+     RESPONSIVE
+     ============================================================ */
+  @media (max-width: 768px) {
+    .app { padding: 80px 16px 40px; }
+    .site-title { font-size: 1.8rem; }
+    .settings-grid { grid-template-columns: 1fr; }
+    #askBtn { position: static; width: 100%; transform: none; margin-top: 1rem; }
+    #askBtn.loading { transform: none; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- Animated background -->
+  <div class="bg-waves">
+    <div class="wave"></div>
+    <div class="wave"></div>
+    <div class="wave"></div>
+  </div>
+
+  <!-- Tricolour header -->
+  <div class="tricolor-header">
+    <div class="band saffron"></div>
+    <div class="band white"></div>
+    <div class="band emerald"></div>
+  </div>
+
+  <div class="app">
+    <header class="header-content">
+      <div class="site-title">
+        🇮🇳 Constitution of India <span>—</span> RAG QA
+      </div>
+      <div class="site-subtitle">Answers only from the indexed Constitution, with Article citations</div>
+    </header>
+
+    <!-- Settings -->
+    <div class="glass-card">
+      <div style="font-weight:700; color:var(--emerald); margin-bottom:1rem; display:flex; align-items:center; gap:0.5rem;">
+        ⚙️ Retrieval settings
+      </div>
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label>Chunking</label>
+          <select id="chunking">
+            <option value="article">Article-level</option>
+            <option value="fixed256">Fixed 256 tokens</option>
+            <option value="fixed512">Fixed 512 tokens</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label>Retriever</label>
+          <select id="retriever">
+            <option value="hybrid">Hybrid (BM25 + Dense)</option>
+            <option value="bm25">BM25 (keyword)</option>
+            <option value="dense">Dense (semantic)</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label>Top-k chunks</label>
+          <select id="topK">
+            <option value="3">3</option>
+            <option value="5" selected>5</option>
+            <option value="10">10</option>
+          </select>
+        </div>
+        <div class="setting-item setting-item-flex">
+          <input type="checkbox" id="rerank" checked>
+          <label style="margin:0;">Cross-encoder reranker</label>
+        </div>
+        <div class="setting-item">
+          <label>Abstain threshold</label>
+          <select id="abstainThreshold">
+            <option value="0.10">0.10 (strict)</option>
+            <option value="0.25" selected>0.25 (default)</option>
+            <option value="0.40">0.40 (lenient)</option>
+            <option value="0.60">0.60 (very lenient)</option>
+          </select>
+        </div>
+        <div class="setting-item setting-item-flex">
+          <input type="checkbox" id="useRetrieval" checked>
+          <label style="margin:0;">Use retrieval (RAG)</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Question area -->
+    <div class="glass-card">
+      <div class="question-area">
+        <input type="text" id="questionInput"
+          placeholder="e.g. What does Article 21 say? Can the police arrest me without telling me why?"
+          maxlength="500">
+        <button id="askBtn">Ask</button>
+      </div>
+      <div class="example-chips">
+        <span style="font-size:0.8rem; color:var(--muted); font-weight:600; margin-right:0.5rem;">Try:</span>
+        <button class="example-chip" onclick="setQuestion('Can the police arrest me without telling me why?')">Arrest without grounds?</button>
+        <button class="example-chip" onclick="setQuestion('What does Article 21 say?')">Article 21</button>
+        <button class="example-chip" onclick="setQuestion('What does Article 14 say about equality?')">Article 14</button>
+        <button class="example-chip" onclick="setQuestion('Who is the current Prime Minister of India?')">Current PM (not in Constitution)</button>
+        <button class="example-chip" onclick="setQuestion('What are the Fundamental Rights?')">Fundamental Rights</button>
+      </div>
+    </div>
+
+    <!-- Dynamic content area -->
+    <div id="contentArea"></div>
+
+    <div class="footer-meta">
+      Constitution of India RAG QA &bull; Built for CSEG4134 NLP Lab &bull; Backend: FastAPI + Vercel
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <!-- Article Modal -->
+  <div id="articleModal">
+    <button class="modal-close" onclick="closeArticleModal()">&times;</button>
+    <div class="modal-content">
+      <div class="modal-title">
+        <span id="modalArticleTitle">Article <span id="modalArticleNum">—</span></span>
+        <span class="modal-part" id="modalArticlePart">Part —</span>
+      </div>
+      <div class="modal-text" id="modalArticleText"></div>
+    </div>
+  </div>
+
+  <script>
+    // ============================================================
+    // CONFIG
+    // ============================================================
+    const BACKEND_URL = window.location.origin; // same-origin on Vercel
+    const API = `${BACKEND_URL}/api`;
+
+    // ============================================================
+    // STATE
+    // ============================================================
+    let currentOpenArticle = null;
+
+    // ============================================================
+    // UTILITIES
+    // ============================================================
+    function setQuestion(q) {
+      document.getElementById('questionInput').value = q;
+    }
+
+    function showToast(msg, type = 'info') {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.className = '';
+      toast.classList.add('show');
+      if (type === 'error') toast.style.background = '#d32f2f';
+      else if (type === 'success') toast.style.background = var(--emerald);
+      setTimeout(() => { toast.classList.remove('show'); }, 3000);
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ============================================================
+    // API CALLS
+    // ============================================================
+    async function askQuestion(question, cfg) {
+      const btn = document.getElementById('askBtn');
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.classList.add('loading');
+      btn.innerHTML = '<span class="spinner"></span>Analyzing…';
+
+      try {
+        const res = await fetch(`${API}/ask`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question,
+            chunking: cfg.chunking,
+            retriever: cfg.retriever,
+            top_k: parseInt(cfg.topK),
+            rerank: cfg.rerank,
+            abstain_threshold: parseFloat(cfg.abstainThreshold),
+            use_retrieval: cfg.useRetrieval,
+          }),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`Server error ${res.status}: ${errText}`);
+        }
+
+        return await res.json();
+      } catch (err) {
+        showToast(err.message, 'error');
+        return null;
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('loading');
+        btn.textContent = originalText;
+      }
+    }
+
+    async function fetchArticle(articleNum) {
+      const res = await fetch(`${API}/article/${articleNum}`);
+      if (!res.ok) return null;
+      return await res.json();
+    }
+
+    async function fetchHealth() {
+      try {
+        const res = await fetch(`${API}/health`);
+        return await res.json();
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // ============================================================
+    // RENDERERS
+    // ============================================================
+    function renderAbstained(data) {
+      return `
+        <div class="banner abstain">
+          <span class="icon">⚠️</span>
+          <span>Not found in the Constitution</span>
+        </div>
+        ${data.abstain_reason ? `<div style="font-size:0.85rem; color:var(--muted); margin-bottom:1rem;">${escapeHtml(data.abstain_reason)}</div>` : ''}
+      `;
+    }
+
+    function renderFound(data) {
+      return `
+        <div class="banner found">
+          <span class="icon">✅</span>
+          <span>Answer found in the Constitution</span>
+        </div>
+      `;
+    }
+
+    function renderShortcut(data) {
+      if (!data.exact_article) return '';
+      const ea = data.exact_article;
+      return `
+        <div style="background:#FFF4E0; border:1px solid var(--saffron); border-radius:10px; padding:1rem 1.25rem; margin-bottom:1.5rem; font-size:0.9rem; color:#4A3700; display:flex; align-items:center; gap:0.75rem;">
+          ⚡ <strong>Exact-lookup shortcut:</strong> Article ${ea.article} (Part ${ea.part}) — also went through retrieval
+        </div>
+      `;
+    }
+
+    function renderAnswer(data) {
+      return `
+        <div class="answer-card">${escapeHtml(data.answer)}</div>
+      `;
+    }
+
+    function renderCitedChips(data) {
+      if (!data.cited_articles || data.cited_articles.length === 0) return '';
+      const chips = data.cited_articles.map(art =>
+        `<button class="chip" onclick="openArticle('${art}')" title="Open Article ${art}">[Article ${art}]</button>`
+      ).join('');
+      return `
+        <div class="chips-label">📌 Cited Articles <span style="font-weight:400; font-size:0.85rem; color:var(--muted);">(click to open full text)</span></div>
+        <div class="chip-row">${chips}</div>
+      `;
+    }
+
+    function renderFlagged(data) {
+      if (!data.flagged_citations || data.flagged_citations.length === 0) return '';
+      const flagged = data.flagged_citations.map(a => `[Article ${a}]`).join(', ');
+      return `
+        <div class="flagged-note">
+          ⚠️ Citation check flagged (not in retrieved passages): ${flagged}
+        </div>
+      `;
+    }
+
+    function renderRetrieved(data) {
+      if (!data.retrieved || data.retrieved.length === 0) return '';
+      const chunks = data.retrieved.map(c => {
+        const arts = c.articles.map(a => `[Article ${a}]`).join(' ');
+        return `
+          <div class="chunk-card" style="animation-delay: ${data.retrieved.indexOf(c) * 0.08}s">
+            <div class="chunk-meta">
+              <span class="chunk-rank">#${c.rank}</span>
+              <span class="chunk-arts">${escapeHtml(arts)}</span>
+              <span class="chunk-score">score ${c.score.toFixed(4)}</span>
+              <span class="chunk-part">Part ${c.part}</span>
+            </div>
+            <div class="chunk-text">${escapeHtml(c.text)}</div>
+          </div>
+        `;
+      }).join('');
+      return `
+        <div class="chunks-title">🔍 Retrieved Passages (${data.retrieved.length})</div>
+        ${chunks}
+      `;
+    }
+
+    function renderMeta(data) {
+      const cu = data.config_used;
+      return `
+        <div class="footer-meta">
+          Latency: ${data.latency_ms} ms &bull;
+          Chunking: ${cu.chunking} &bull;
+          Retriever: ${cu.retriever} &bull;
+          Rerank: ${cu.rerank ? 'Yes' : 'No'} &bull;
+          LLM: ${cu.llm_mode}
+        </div>
+      `;
+    }
+
+    function renderContent(data) {
+      const parts = [];
+      if (data.abstained) parts.push(renderAbstained(data));
+      else parts.push(renderFound(data));
+      if (data.exact_article) parts.push(renderShortcut(data));
+      parts.push(renderAnswer(data));
+      parts.push(renderCitedChips(data));
+      if (data.flagged_citations && data.flagged_citations.length > 0) parts.push(renderFlagged(data));
+      parts.push(renderRetrieved(data));
+      parts.push(renderMeta(data));
+      return parts.join('');
+    }
+
+    // ============================================================
+    // ARTICLE MODAL
+    // ============================================================
+    async function openArticle(articleNum) {
+      currentOpenArticle = articleNum;
+      const modal = document.getElementById('articleModal');
+      const titleEl = document.getElementById('modalArticleTitle');
+      const numEl = document.getElementById('modalArticleNum');
+      const partEl = document.getElementById('modalArticlePart');
+      const textEl = document.getElementById('modalArticleText');
+
+      titleEl.textContent = 'Loading Article…';
+      numEl.textContent = articleNum;
+      partEl.textContent = 'Part —';
+      textEl.textContent = 'Fetching…';
+      modal.classList.add('show');
+
+      try {
+        const art = await fetchArticle(articleNum);
+        if (art) {
+          titleEl.textContent = 'Article';
+          numEl.textContent = art.article;
+          partEl.textContent = `Part ${art.part}`;
+          textEl.textContent = `${art.title}\n\n${art.text}`;
+        } else {
+          textEl.textContent = 'Could not load this Article.';
+        }
+      } catch (e) {
+        textEl.textContent = 'Error loading Article.';
+        showToast('Failed to load Article', 'error');
+      }
+    }
+
+    function closeArticleModal() {
+      document.getElementById('articleModal').classList.remove('show');
+      currentOpenArticle = null;
+    }
+
+    // Close modal on outside click
+    document.getElementById('articleModal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('articleModal')) closeArticleModal();
+    });
+    // Close on Escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeArticleModal();
+    });
+
+    // ============================================================
+    // MAIN EVENT
+    // ============================================================
+    document.getElementById('askBtn').addEventListener('click', async () => {
+      const input = document.getElementById('questionInput');
+      const question = input.value.trim();
+      if (!question) {
+        input.focus();
+        return;
+      }
+
+      const cfg = {
+        chunking: document.getElementById('chunking').value,
+        retriever: document.getElementById('retriever').value,
+        topK: document.getElementById('topK').value,
+        rerank: document.getElementById('rerank').checked,
+        abstainThreshold: document.getElementById('abstainThreshold').value,
+        useRetrieval: document.getElementById('useRetrieval').checked,
+      };
+
+      const contentArea = document.getElementById('contentArea');
+      contentArea.innerHTML = `
+        <div class="glass-card" style="text-align:center; padding:3rem;">
+          <div class="spinner" style="margin:0 auto 1rem;"></div>
+          <div style="color:var(--muted); font-weight:600;">Retrieving passages & generating answer…</div>
+        </div>
+      `;
+      contentArea.scrollIntoView({ behavior: 'smooth' });
+
+      const data = await askQuestion(question, cfg);
+      if (data) {
+        contentArea.innerHTML = renderContent(data);
+        showToast(data.abstained ? 'Answer not found in Constitution' : 'Answer ready', data.abstained ? 'info' : 'success');
+      }
+    });
+
+    // Enter key to ask
+    document.getElementById('questionInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') document.getElementById('askBtn').click();
+    });
+
+    // ============================================================
+    // INITIAL HEALTH CHECK
+    // ============================================================
+    (async () => {
+      const health = await fetchHealth();
+      if (health) {
+        console.log('Backend healthy:', health);
+      } else {
+        showToast('Backend not reachable. Make sure the API is deployed.', 'error');
+      }
+    })();
+  </script>
+</body>
+</html>
