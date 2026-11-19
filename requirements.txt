@@ -1,0 +1,27 @@
+# Core
+numpy
+PyYAML
+pydantic
+nltk
+
+# Indexing / retrieval
+rank-bm25
+faiss-cpu
+sentence-transformers
+
+# Generation / backend
+fastapi
+uvicorn
+python-multipart
+transformers
+torch
+
+# Frontend
+streamlit
+
+# Evaluation / testing
+pytest
+rouge-score
+scikit-learn
+matplotlib
+pandas
