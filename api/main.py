@@ -1,25 +1,28 @@
-"""Vercel serverless backend — FastAPI wrapped with Mangum.
+"""Vercel serverless backend — lightweight BM25-only retrieval.
 
-This file lives at api/main.py and is deployed as a Vercel serverless function.
-It loads indexes once per cold start and serves:
-  POST /api/ask, GET /api/article/{n}, GET /api/config, GET /api/health
+Deployed as api/main.py via @vercel/python. Uses only light packages
+(fastapi, pydantic, pyyaml, mangum, rank-bm25, numpy) so the bundle stays
+under Vercel's 500 MB limit. Dense/sentence-transformers retrieval is NOT
+available in the serverless function; BM25 keyword search is used instead.
 
-Environment variables (set in Vercel project settings):
-  RAG_API_KEY, RAG_API_BASE, RAG_API_MODEL, RAG_LLM_MODE, RAG_LOCAL_MODEL
-  BACKEND_URL (for CORS / frontend reference)
+Endpoints:
+  POST   /api/ask
+  GET    /api/article/{n}
+  GET    /api/config
+  GET    /api/health
 """
 
 from __future__ import annotations
 
 import json
 import os
+import pickle
 import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-# Ensure project root is importable so `src.` packages resolve.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -29,15 +32,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 from pydantic import BaseModel, Field
-
-from src.generate import Generator
-from src.retrieve import (
-    Retriever,
-    best_score,
-    get_retriever,
-    should_abstain,
-    verify_citations,
-)
+from rank_bm25 import BM25Okapi
 
 CONFIG_PATH = ROOT / "config.yaml"
 
@@ -59,9 +54,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- in-memory article index for exact lookup ----
-ARTICLES: Dict[str, list] = {}
+# ---- Load BM25 index + metadata once per cold start ----
+_BM25 = None
+_BM25_IDS: List[str] = []
+_BM25_TEXTS: List[str] = []
+_BM25_ARTICLES: List[List[str]] = []
+_BM25_PARTS: List[str] = []
+_BM25_TITLES: List[str] = []
+
+# ---- Article index for exact lookup ----
+ARTICLES: Dict[str, List[dict]] = {}
 _ARTICLES_LOADED = False
+
+
+def _load_indexes() -> None:
+    global _BM25, _BM25_IDS, _BM25_TEXTS, _BM25_ARTICLES, _BM25_PARTS, _BM25_TITLES
+    if _BM25 is not None:
+        return
+
+    variant = CFG["chunking"]["default"]
+    model_name = CFG["embedding"]["default"]
+    import re as _re
+
+    def _slug(name: str) -> str:
+        return _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+    index_dir = ROOT / CFG["paths"]["index_dir"] / variant / _slug(model_name)
+
+    # Load BM25
+    bm25_path = index_dir.parent / "bm25.pkl"
+    with bm25_path.open("rb") as fh:
+        pkg = pickle.load(fh)
+    _BM25 = pkg["bm25"]
+    _BM25_IDS = pkg["ids"]
+    _BM25_TEXTS = pkg["corpus"]
+
+    # Load metadata (texts, articles, parts, titles) from FAISS meta.json
+    meta_path = index_dir / f"{_slug(model_name)}.meta.json"
+    with meta_path.open("r", encoding="utf-8") as fh:
+        meta = json.load(fh)
+    _BM25_ARTICLES = meta["articles"]
+    _BM25_PARTS = meta["parts"]
+    _BM25_TITLES = meta["titles"]
 
 
 def _load_articles() -> None:
@@ -77,20 +111,6 @@ def _load_articles() -> None:
             rec = json.loads(line)
             ARTICLES.setdefault(rec["article"], []).append(rec)
     _ARTICLES_LOADED = True
-
-
-# ---- cached retriever (one per cold start) ----
-_DEFAULT_RETRIEVER: Optional[Retriever] = None
-
-
-def default_retriever() -> Retriever:
-    global _DEFAULT_RETRIEVER
-    if _DEFAULT_RETRIEVER is None:
-        _DEFAULT_RETRIEVER = get_retriever(
-            CFG["chunking"]["default"],
-            CFG["embedding"]["default"],
-        )
-    return _DEFAULT_RETRIEVER
 
 
 # ---- request / response models ----
@@ -109,7 +129,7 @@ class ChunkOut(BaseModel):
     text: str
     score: float
     rank: int
-    articles: list[str]
+    articles: List[str]
     part: str
     title: str
 
@@ -117,9 +137,9 @@ class ChunkOut(BaseModel):
 class AskResponse(BaseModel):
     question: str
     answer: str
-    cited_articles: list[str]
-    flagged_citations: list[str]
-    retrieved: list[ChunkOut]
+    cited_articles: List[str]
+    flagged_citations: List[str]
+    retrieved: List[ChunkOut]
     abstained: bool
     abstain_reason: Optional[str] = None
     exact_article: Optional[dict] = None
@@ -145,8 +165,11 @@ class HealthOut(BaseModel):
 
 
 # ---- helpers ----
+def _tokenize(text: str) -> List[str]:
+    return text.lower().split()
+
+
 def _exact_article_lookup(question: str) -> Optional[dict]:
-    """Return the Article record if the question is an exact Article lookup."""
     _load_articles()
     m = re.search(r"article\s+([0-9]{1,3}[A-Z]?)\b", question, re.IGNORECASE)
     if not m:
@@ -166,17 +189,44 @@ def _exact_article_lookup(question: str) -> Optional[dict]:
     }
 
 
-def _run_retrieval(retriever: Retriever, question: str, top_k: int,
-                   retriever_kind: str, rerank: bool) -> list[dict]:
-    candidates = retriever.search(question, top_k=top_k, retriever=retriever_kind)
-    if rerank and CFG["reranker"]["enabled"]:
-        candidates = retriever.rerank(question, candidates)
-    return candidates
+def _cited_articles_in_text(text: str) -> List[str]:
+    return sorted(set(re.findall(r"\[Article\s+([0-9A-Za-z]+)\]", text, re.IGNORECASE)))
+
+
+def _verify_citations(answer: str, retrieved: List[dict]) -> tuple:
+    retrieved_arts = set()
+    for c in retrieved:
+        retrieved_arts.update(str(a) for a in c["articles"])
+    cited = _cited_articles_in_text(answer)
+    valid = [a for a in cited if a in retrieved_arts]
+    flagged = [a for a in cited if a not in retrieved_arts]
+    return valid, flagged
+
+
+def _extractive_answer(question: str, retrieved: List[dict]) -> str:
+    if not retrieved:
+        return "Not found in the Constitution."
+    parts = []
+    seen = []
+    for c in retrieved:
+        for a in c["articles"]:
+            if a not in seen:
+                seen.append(a)
+        parts.append(f"[Article {', '.join(c['articles'])}] {c['text']}")
+    answer = "\n\n".join(parts)
+    if len(answer) > 1200:
+        answer = answer[:1200] + "..."
+    return answer
+
+
+def _should_abstain(best_score_val: float, threshold: float) -> bool:
+    return best_score_val < threshold
 
 
 # ---- routes ----
 @app.get("/api/health", response_model=HealthOut)
 def health() -> HealthOut:
+    _load_indexes()
     _load_articles()
     return HealthOut(
         status="ok",
@@ -208,6 +258,7 @@ def get_article(number: str) -> ArticleOut:
 @app.post("/api/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
     start = time.time()
+    _load_indexes()
     _load_articles()
 
     chunking = req.chunking or CFG["chunking"]["default"]
@@ -219,14 +270,28 @@ def ask(req: AskRequest) -> AskResponse:
 
     exact = _exact_article_lookup(req.question)
 
-    retrieved: list[dict] = []
-    retriever = None
+    # BM25 retrieval (serverless: no dense/sentence-transformers)
+    retrieved: List[dict] = []
     if use_retrieval:
-        retriever = get_retriever(
-            chunking, CFG["embedding"]["default"]
-        ) if chunking != CFG["chunking"]["default"] else default_retriever()
-        retrieved = _run_retrieval(retriever, req.question, top_k,
-                                   retriever_kind, rerank)
+        _load_indexes()
+        tokenized = _tokenize(req.question)
+        scores = _BM25.get_scores(tokenized)
+        import numpy as np
+        top = np.argsort(scores)[::-1][: top_k * 3]
+        bm25_results = []
+        for rank, pos in enumerate(top, start=1):
+            if scores[pos] <= 0:
+                continue
+            bm25_results.append({
+                "chunk_id": _BM25_IDS[int(pos)],
+                "text": _BM25_TEXTS[int(pos)],
+                "score": float(scores[pos]),
+                "rank": rank,
+                "articles": _BM25_ARTICLES[int(pos)],
+                "part": _BM25_PARTS[int(pos)],
+                "title": _BM25_TITLES[int(pos)],
+            })
+        retrieved = bm25_results[:top_k]
 
     if exact:
         already = any(c["chunk_id"] == f"art_{exact['part']}_{exact['article']}"
@@ -242,26 +307,25 @@ def ask(req: AskRequest) -> AskResponse:
                 "title": exact["title"],
             })
 
+    # Abstention: use best BM25 score normalized (rough proxy)
     abstained = False
     abstain_reason = None
-    if CFG["abstain"]["enabled"] and use_retrieval:
-        best_cosine = retriever.dense_best_score(req.question) if retrieved else 0.0
-        if should_abstain(best_cosine, threshold):
+    if CFG["abstain"]["enabled"] and use_retrieval and retrieved:
+        best_score_val = max(float(c["score"]) for c in retrieved)
+        # BM25 scores are unbounded; use a heuristic threshold relative to max
+        if _should_abstain(best_score_val, threshold):
             abstained = True
             abstain_reason = (
-                f"best cosine similarity {best_cosine:.3f} below threshold {threshold}"
+                f"best BM25 score {best_score_val:.3f} below threshold {threshold}"
             )
 
-    generator = Generator(CFG)
     if abstained:
         answer = "Not found in the Constitution"
-        cited_articles: list[str] = []
-        flagged: list[str] = []
+        cited_articles: List[str] = []
+        flagged: List[str] = []
     else:
-        answer = generator.generate(
-            req.question, retrieved, use_retrieval=use_retrieval
-        )
-        valid, flagged = verify_citations(answer, retrieved)
+        answer = _extractive_answer(req.question, retrieved)
+        valid, flagged = _verify_citations(answer, retrieved)
         cited_articles = valid
 
     latency_ms = (time.time() - start) * 1000.0
@@ -294,10 +358,9 @@ def ask(req: AskRequest) -> AskResponse:
             "rerank": rerank,
             "abstain_threshold": threshold,
             "use_retrieval": use_retrieval,
-            "llm_mode": generator.mode,
+            "llm_mode": "none (serverless)",
         },
     )
 
 
-# Vercel serverless handler
 handler = Mangum(app)
