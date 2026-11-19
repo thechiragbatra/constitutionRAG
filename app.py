@@ -21,7 +21,10 @@ import streamlit as st
 
 def _backend_url() -> str:
     try:
-        return st.secrets.get("BACKEND_URL", "http://localhost:8000")
+        url = st.secrets.get("BACKEND_URL", "http://localhost:8000")
+        if not url:
+            url = "http://localhost:8000"
+        return url
     except Exception:
         return "http://localhost:8000"
 
