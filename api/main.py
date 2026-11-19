@@ -30,7 +30,6 @@ if str(ROOT) not in sys.path:
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from mangum import Mangum
 from pydantic import BaseModel, Field
 from rank_bm25 import BM25Okapi
 
@@ -363,4 +362,4 @@ def ask(req: AskRequest) -> AskResponse:
     )
 
 
-handler = Mangum(app)
+handler = app

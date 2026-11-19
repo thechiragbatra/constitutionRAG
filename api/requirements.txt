@@ -1,6 +1,5 @@
 fastapi
 pydantic
 pyyaml
-mangum
 rank-bm25
 numpy
