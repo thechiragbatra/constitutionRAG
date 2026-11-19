@@ -1,15 +1,14 @@
 """Stage 1: Segment the cleaned Constitution text into Articles and chunks.
 
-Reads data/processed/clean.txt and writes:
-  data/processed/articles.jsonl        (one Article per record)
-  data/processed/chunks_article.jsonl  (Article-level chunks)
-  data/processed/chunks_fixed256.jsonl (fixed ~256-token chunks)
-  data/processed/chunks_fixed512.jsonl (fixed ~512-token chunks)
+Real PDF layout (Government of India edition):
+  1. Name and territory of the Union.—(1) India, that is Bharat, ...
+  21. Protection of life and personal liberty.—No person shall be ...
 
-Every record has: chunk_id, articles (list of Article numbers), part, title, text.
-
-Article detection looks for lines starting with "Article <N>" (case-insensitive).
-Part detection looks for "PART <roman>". Titles are best-effort and may be empty.
+An Article start is a line matching ``<number>. <Title>—<body>`` (title only is
+also accepted). Amendment footnotes (``1. Subs. by ...``) are filtered out and
+attached to the preceding Article. Every record has: chunk_id, articles (list),
+part, title, text. chunk_id is ``art_<part>_<article>`` so it stays unique even
+though Article numbers repeat across Parts.
 """
 
 from __future__ import annotations
@@ -23,8 +22,17 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config.yaml"
 
-ARTICLE_RE = re.compile(r"^\s*Article\s+([0-9]+[A-Za-z]?)\b", re.IGNORECASE)
+# optional [footnote marker] then <number>.<Title> [— <body>]
+ARTICLE_START_RE = re.compile(
+    r"^\s*(?:\[\d+\]\s*)?(\d{1,3}[A-Z]?)\.\s+(.{2,100}?)(?:\s*\u2014\s*(.+))?\s*$",
+    re.IGNORECASE,
+)
 PART_RE = re.compile(r"^\s*PART\s+([IVXLCDM]+)\b", re.IGNORECASE)
+# Titles beginning with these are amendment footnotes, not real Articles.
+FOOTNOTE_HEADS = (
+    "subs.", "ins.", "rep.", "omit.", "sub-clause", "sub-heading",
+    "the words", "added by", "art.",
+)
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
@@ -37,42 +45,92 @@ def token_count(text: str) -> int:
     return len(text.split())
 
 
+def is_footnote_title(title: str) -> bool:
+    return any(title.lower().startswith(h) for h in FOOTNOTE_HEADS)
+
+
 def segment_articles(text: str) -> list[dict]:
-    """Split clean.txt into Article records: {article, part, title, text, start_line}."""
+    """Split clean.txt into Article records: {article, part, title, text}."""
     lines = text.split("\n")
     articles = []
     current_part = ""
     current_article = None
     current_article_part = ""
-    buffer = []
+    current_article_title = ""
+    buffer: list[str] = []
 
-    def flush():
-        nonlocal current_article, current_article_part, buffer
+    def flush() -> None:
+        nonlocal current_article, current_article_title, buffer
         if current_article is not None and buffer:
             articles.append({
                 "article": current_article,
                 "part": current_article_part,
-                "title": "",
+                "title": current_article_title,
                 "text": "\n".join(buffer).strip(),
             })
         buffer = []
+        current_article_title = ""
 
     for line in lines:
         m_part = PART_RE.match(line)
-        if m_part and not ARTICLE_RE.match(line):
+        if m_part and not ARTICLE_START_RE.match(line):
             current_part = m_part.group(1).upper()
             continue
-        m_art = ARTICLE_RE.match(line)
+        m_art = ARTICLE_START_RE.match(line)
         if m_art:
+            title = m_art.group(2).strip()
+            if is_footnote_title(title):
+                # Amendment footnote: attach to preceding article, do not start a new one.
+                if current_article is not None:
+                    buffer.append(line)
+                continue
             flush()
             current_article = m_art.group(1)
-            current_article_part = current_part  # snapshot part at article start
+            current_article_part = current_part
+            current_article_title = title
             buffer = [line]
         else:
             if current_article is not None:
                 buffer.append(line)
     flush()
-    return articles
+
+    # De-duplicate by chunk id (Article numbers repeat across Parts).
+    seen = set()
+    unique = []
+    for a in articles:
+        cid = f"art_{a['part']}_{a['article']}"
+        if cid in seen:
+            continue
+        seen.add(cid)
+        unique.append(a)
+    return unique
+
+
+def build_chunk_records(articles: list[dict], variant: str) -> list[dict]:
+    records = []
+    if variant == "article":
+        for art in articles:
+            records.append({
+                "chunk_id": f"art_{art['part']}_{art['article']}",
+                "articles": [art["article"]],
+                "part": art["part"],
+                "title": art["title"],
+                "text": art["text"],
+            })
+    else:
+        size = int(variant.replace("fixed", ""))
+        for art in articles:
+            base = f"{variant}_a{art['part']}_{art['article']}"
+            parts = fixed_chunks(art["text"], size)
+            for j, ptext in enumerate(parts):
+                records.append({
+                    "chunk_id": f"{base}_{j}",
+                    "articles": [art["article"]],
+                    "part": art["part"],
+                    "title": art["title"],
+                    "text": ptext,
+                })
+    return records
 
 
 def fixed_chunks(text: str, size: int, overlap: int = 0) -> list[str]:
@@ -80,7 +138,7 @@ def fixed_chunks(text: str, size: int, overlap: int = 0) -> list[str]:
     tokens = text.split()
     if not tokens:
         return []
-    step = size - overlap if overlap < size else size
+    step = size - overlap if 0 <= overlap < size else size
     chunks = []
     for i in range(0, len(tokens), step):
         chunk = " ".join(tokens[i:i + size])
@@ -89,35 +147,6 @@ def fixed_chunks(text: str, size: int, overlap: int = 0) -> list[str]:
         if i + size >= len(tokens):
             break
     return chunks
-
-
-def build_chunk_records(articles: list[dict], variant: str) -> list[dict]:
-    records = []
-    if variant == "article":
-        for art in articles:
-            records.append({
-                "chunk_id": f"art_{art['article']}",
-                "articles": [art["article"]],
-                "part": art["part"],
-                "title": art["title"],
-                "text": art["text"],
-            })
-    else:
-        size = int(variant.replace("fixed", ""))
-        idx = 0
-        for art in articles:
-            parts = fixed_chunks(art["text"], size)
-            for j, ptext in enumerate(parts):
-                # Find which articles this fixed chunk touches (its own article here).
-                records.append({
-                    "chunk_id": f"{variant}_a{art['article']}_{j}",
-                    "articles": [art["article"]],
-                    "part": art["part"],
-                    "title": art["title"],
-                    "text": ptext,
-                })
-                idx += 1
-    return records
 
 
 def write_jsonl(records: list[dict], path: Path) -> None:
@@ -132,7 +161,7 @@ def main() -> int:
     clean_path = processed_dir / "clean.txt"
 
     if not clean_path.exists():
-        print(f"[chunk] {clean_path} not found. Run src/parse.py first (or add clean.txt).")
+        print(f"[chunk] {clean_path} not found. Run src/parse.py first.")
         return 1
 
     text = clean_path.read_text(encoding="utf-8")

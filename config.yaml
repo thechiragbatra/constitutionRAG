@@ -30,7 +30,7 @@ embedding:
     - name: intfloat/multilingual-e5-small
       dim: 384
       normalize: true
-  default: all-MiniLM-L6-v2
+  default: sentence-transformers/all-MiniLM-L6-v2
 
 # Retrieval
 retrieval:

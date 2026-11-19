@@ -1,0 +1,10 @@
+{"question": "What does Article 21 say?", "gold_articles": ["21"], "reference_answer": "Article 21 protects life and personal liberty; no person shall be deprived of life or personal liberty except according to procedure established by law.", "answerable": true}
+{"question": "Can the police arrest a person without informing them of the grounds?", "gold_articles": ["22"], "reference_answer": "Article 22 requires that an arrested person be informed of the grounds of arrest and allowed to consult a legal practitioner.", "answerable": true}
+{"question": "What does Article 14 say?", "gold_articles": ["14"], "reference_answer": "Article 14 guarantees equality before the law and equal protection of the laws within the territory of India.", "answerable": true}
+{"question": "Which Article protects freedom of speech and expression?", "gold_articles": ["19"], "reference_answer": "Article 19 protects the right to freedom of speech and expression, subject to reasonable restrictions.", "answerable": true}
+{"question": "What is the right to constitutional remedies?", "gold_articles": ["32"], "reference_answer": "Article 32 guarantees the right to move the Supreme Court for enforcement of fundamental rights.", "answerable": true}
+{"question": "Is untouchability abolished?", "gold_articles": ["17"], "reference_answer": "Article 17 abolishes untouchability and forbids its practice in any form.", "answerable": true}
+{"question": "Does Article 21A relate to education?", "gold_articles": ["21A"], "reference_answer": "Article 21A provides the right to free and compulsory education for children aged six to fourteen.", "answerable": true}
+{"question": "Who is the current Prime Minister of India?", "gold_articles": [], "reference_answer": "Not found in the Constitution.", "answerable": false}
+{"question": "What is the weather in Delhi today?", "gold_articles": [], "reference_answer": "Not found in the Constitution.", "answerable": false}
+{"question": "How do I bake a chocolate cake?", "gold_articles": [], "reference_answer": "Not found in the Constitution.", "answerable": false}
