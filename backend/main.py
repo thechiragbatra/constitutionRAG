@@ -1,33 +1,33 @@
-"""Stage 5: FastAPI backend.
+"""Stage 5: FastAPI backend — single source of truth.
 
 Endpoints:
-  POST   /ask          - question (+ optional config overrides) -> answer + citations
-  GET    /article/{n}  - exact Article lookup
-  GET    /config       - current configuration
-  GET    /health       - service status
+  POST   /api/ask          - question + config overrides -> answer + citations
+  GET    /api/article/{n}  - exact Article text
+  GET    /api/config       - current configuration
+  GET    /api/health       - service status
 
-Indexes are loaded once at startup (default chunking + embedding model) and
-retrievers for other variants are cached on demand.
+Loads indexes once at startup. Imports heavy ML deps lazily so the same file
+can be deployed on Vercel (serverless) and run locally.
 """
 
 from __future__ import annotations
 
+import json
 import re
+import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from src.retrieve import (
-    Retriever, best_score, get_retriever, should_abstain, verify_citations,
-)
-from src.generate import Generator, build_prompt
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 CONFIG_PATH = ROOT / "config.yaml"
 
 
@@ -48,7 +48,7 @@ app.add_middleware(
 )
 
 # ---- in-memory article index for exact lookup ----
-ARTICLES: dict[str, list[dict]] = {}
+ARTICLES: Dict[str, List[dict]] = {}
 _ARTICLES_LOADED = False
 
 
@@ -59,7 +59,6 @@ def _load_articles() -> None:
     processed_dir = ROOT / CFG["paths"]["processed_dir"]
     path = processed_dir / "articles.jsonl"
     if path.exists():
-        import json
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
@@ -68,13 +67,14 @@ def _load_articles() -> None:
     _ARTICLES_LOADED = True
 
 
-# ---- default retriever (loaded at startup) ----
-_DEFAULT_RETRIEVER: Optional[Retriever] = None
+# ---- cached retriever (one per process/cold start) ----
+_DEFAULT_RETRIEVER: Optional[Any] = None
 
 
-def default_retriever() -> Retriever:
+def default_retriever() -> Any:
     global _DEFAULT_RETRIEVER
     if _DEFAULT_RETRIEVER is None:
+        from src.retrieve import get_retriever
         _DEFAULT_RETRIEVER = get_retriever(
             CFG["chunking"]["default"],
             CFG["embedding"]["default"],
@@ -90,9 +90,7 @@ class AskRequest(BaseModel):
     top_k: Optional[int] = Field(None, description="number of chunks to retrieve")
     rerank: Optional[bool] = Field(None, description="apply cross-encoder reranker")
     abstain_threshold: Optional[float] = Field(None, description="abstain score threshold")
-    use_retrieval: Optional[bool] = Field(
-        None, description="False => no-retrieval ablation"
-    )
+    use_retrieval: Optional[bool] = Field(None, description="False => no-retrieval ablation")
 
 
 class ChunkOut(BaseModel):
@@ -100,7 +98,7 @@ class ChunkOut(BaseModel):
     text: str
     score: float
     rank: int
-    articles: list[str]
+    articles: List[str]
     part: str
     title: str
 
@@ -108,9 +106,9 @@ class ChunkOut(BaseModel):
 class AskResponse(BaseModel):
     question: str
     answer: str
-    cited_articles: list[str]
-    flagged_citations: list[str]
-    retrieved: list[ChunkOut]
+    cited_articles: List[str]
+    flagged_citations: List[str]
+    retrieved: List[ChunkOut]
     abstained: bool
     abstain_reason: Optional[str] = None
     exact_article: Optional[dict] = None
@@ -136,19 +134,11 @@ class HealthOut(BaseModel):
 
 
 # ---- helpers ----
-ARTICLE_QUERY_RE = re.compile(
-    r"(?:^|\s)(?:article\s+)?([0-9]{1,3}[A-Z]?)\b(?:\s|$|\.|,|\?)",
-    re.IGNORECASE,
-)
-
-
 def _exact_article_lookup(question: str) -> Optional[dict]:
     """Return the Article record if the question is an exact Article lookup."""
     _load_articles()
-    # Prefer explicit "Article N" phrasing.
     m = re.search(r"article\s+([0-9]{1,3}[A-Z]?)\b", question, re.IGNORECASE)
     if not m:
-        # Bare number like "21" or "What does 21 say".
         m = re.search(r"\b([0-9]{1,3}[A-Z]?)\b", question)
     if not m:
         return None
@@ -165,16 +155,54 @@ def _exact_article_lookup(question: str) -> Optional[dict]:
     }
 
 
-def _run_retrieval(retriever: Retriever, question: str, top_k: int,
-                   retriever_kind: str, rerank: bool) -> list[dict]:
+def _run_retrieval(retriever: Any, question: str, top_k: int,
+                   retriever_kind: str, rerank: bool) -> List[dict]:
     candidates = retriever.search(question, top_k=top_k, retriever=retriever_kind)
     if rerank and CFG["reranker"]["enabled"]:
         candidates = retriever.rerank(question, candidates)
     return candidates
 
 
+def _tokenize(text: str) -> List[str]:
+    return text.lower().split()
+
+
+def _cited_articles_in_text(text: str) -> List[str]:
+    return sorted(set(re.findall(r"\[Article\s+([0-9A-Za-z]+)\]", text, re.IGNORECASE)))
+
+
+def _verify_citations(answer: str, retrieved: List[dict]) -> tuple:
+    retrieved_arts = set()
+    for c in retrieved:
+        retrieved_arts.update(str(a) for a in c["articles"])
+    cited = _cited_articles_in_text(answer)
+    valid = [a for a in cited if a in retrieved_arts]
+    flagged = [a for a in cited if a not in retrieved_arts]
+    return valid, flagged
+
+
+def _extractive_answer(question: str, retrieved: List[dict]) -> str:
+    if not retrieved:
+        return "Not found in the Constitution."
+    parts = []
+    seen = []
+    for c in retrieved:
+        for a in c["articles"]:
+            if a not in seen:
+                seen.append(a)
+        parts.append(f"[Article {', '.join(c['articles'])}] {c['text']}")
+    answer = "\n\n".join(parts)
+    if len(answer) > 1200:
+        answer = answer[:1200] + "..."
+    return answer
+
+
+def _should_abstain(best_score_val: float, threshold: float) -> bool:
+    return best_score_val < threshold
+
+
 # ---- routes ----
-@app.get("/health", response_model=HealthOut)
+@app.get("/api/health", response_model=HealthOut)
 def health() -> HealthOut:
     _load_articles()
     return HealthOut(
@@ -184,12 +212,12 @@ def health() -> HealthOut:
     )
 
 
-@app.get("/config", response_model=ConfigOut)
+@app.get("/api/config", response_model=ConfigOut)
 def config() -> ConfigOut:
     return ConfigOut(config=CFG)
 
 
-@app.get("/article/{number}", response_model=ArticleOut)
+@app.get("/api/article/{number}", response_model=ArticleOut)
 def get_article(number: str) -> ArticleOut:
     _load_articles()
     matches = ARTICLES.get(number)
@@ -204,12 +232,11 @@ def get_article(number: str) -> ArticleOut:
     )
 
 
-@app.post("/ask", response_model=AskResponse)
+@app.post("/api/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
     start = time.time()
     _load_articles()
 
-    # Resolve config overrides with defaults.
     chunking = req.chunking or CFG["chunking"]["default"]
     retriever_kind = req.retriever or CFG["retrieval"]["default_retriever"]
     top_k = req.top_k if req.top_k is not None else CFG["retrieval"]["default_top_k"]
@@ -217,13 +244,13 @@ def ask(req: AskRequest) -> AskResponse:
     threshold = req.abstain_threshold if req.abstain_threshold is not None else CFG["abstain"]["score_threshold"]
     use_retrieval = req.use_retrieval if req.use_retrieval is not None else True
 
-    # Exact-lookup shortcut (Article 21, what does Article 14 say, etc.)
     exact = _exact_article_lookup(req.question)
 
     # Retrieval (skipped in no-retrieval ablation).
-    retrieved: list[dict] = []
+    retrieved: List[dict] = []
     retriever = None
     if use_retrieval:
+        from src.retrieve import get_retriever
         retriever = get_retriever(
             chunking, CFG["embedding"]["default"]
         ) if chunking != CFG["chunking"]["default"] else default_retriever()
@@ -250,25 +277,24 @@ def ask(req: AskRequest) -> AskResponse:
     abstain_reason = None
     if CFG["abstain"]["enabled"] and use_retrieval:
         best_cosine = retriever.dense_best_score(req.question) if retrieved else 0.0
-        # Even when reranking, fall back to cosine for the abstention threshold
-        # so the 0..1 config threshold stays meaningful.
-        if should_abstain(best_cosine, threshold):
+        if _should_abstain(best_cosine, threshold):
             abstained = True
             abstain_reason = (
                 f"best cosine similarity {best_cosine:.3f} below threshold {threshold}"
             )
 
     # Generation.
+    from src.generate import Generator
     generator = Generator(CFG)
     if abstained:
         answer = "Not found in the Constitution"
-        cited_articles: list[str] = []
-        flagged: list[str] = []
+        cited_articles: List[str] = []
+        flagged: List[str] = []
     else:
         answer = generator.generate(
             req.question, retrieved, use_retrieval=use_retrieval
         )
-        valid, flagged = verify_citations(answer, retrieved)
+        valid, flagged = _verify_citations(answer, retrieved)
         cited_articles = valid
 
     latency_ms = (time.time() - start) * 1000.0

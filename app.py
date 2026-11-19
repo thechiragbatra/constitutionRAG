@@ -347,7 +347,7 @@ def ask_backend(question: str, cfg: dict):
         "abstain_threshold": cfg["abstain_threshold"],
         "use_retrieval": cfg["use_retrieval"],
     }
-    resp, err = api_post("/ask", payload)
+    resp, err = api_post("/api/ask", payload)
     if resp is None:
         return None, err
     if resp.status_code >= 400:
@@ -356,13 +356,13 @@ def ask_backend(question: str, cfg: dict):
 
 
 def fetch_article(number: str):
-    return fetch_json(f"/article/{number}")
+    return fetch_json(f"/api/article/{number}")
 
 
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
-health, err = fetch_json("/health")
+health, err = fetch_json("/api/health")
 if health is None:
     st.error(
         f"Backend not reachable at `{BACKEND_URL}`. Start it with:\n"

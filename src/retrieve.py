@@ -8,6 +8,10 @@ Three retrievers:
 Optional cross-encoder (cross-encoder/ms-marco-MiniLM-L-12-v2) rescores the
 top-20 candidates down to top-5.
 
+Heavy deps (faiss, sentence-transformers) are imported lazily so this module
+can be imported on Vercel (serverless, 500 MB bundle limit) where only BM25
+is available.
+
 Every result is a dict: {chunk_id, text, score, articles, part, title, rank}.
 """
 
@@ -21,11 +25,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-import faiss
 import numpy as np
 import yaml
-from rank_bm25 import BM25Okapi
-from sentence_transformers import CrossEncoder, SentenceTransformer
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config.yaml"
@@ -46,7 +47,7 @@ def model_slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
-def _load_meta(index_dir: Path, slug: str) -> dict:
+def _load_json_meta(index_dir: Path, slug: str) -> dict:
     with (index_dir / f"{slug}.meta.json").open("r", encoding="utf-8") as fh:
         return json.load(fh)
 
@@ -56,25 +57,28 @@ def _tokenize(text: str) -> list[str]:
 
 
 class Retriever:
-    """Loads one BM25 + one FAISS index and exposes bm25/dense/hybrid search."""
+    """Loads BM25 index eagerly; FAISS + sentence-transformers loaded lazily.
+
+    On environments without faiss/torch (e.g. Vercel serverless), BM25-only
+    retrieval is used. Dense/hybrid methods raise ImportError if called.
+    """
 
     def __init__(self, variant: str, model_name: str, config: Optional[dict] = None):
         self.cfg = config or load_config()
         self.variant = variant
         self.model_name = model_name
         self.slug = model_slug(model_name)
-        index_dir = ROOT / self.cfg["paths"]["index_dir"] / variant / self.slug
+        self.index_dir = ROOT / self.cfg["paths"]["index_dir"] / variant / self.slug
 
-        # ---- BM25 ----
-        with (index_dir.parent / "bm25.pkl").open("rb") as fh:
+        # ---- BM25 (eager, always available) ----
+        with (self.index_dir.parent / "bm25.pkl").open("rb") as fh:
             bm25_pkg = pickle.load(fh)
         self.bm25 = bm25_pkg["bm25"]
         self.bm25_ids = bm25_pkg["ids"]
         self.bm25_corpus = bm25_pkg["corpus"]
 
-        # ---- FAISS ----
-        self.index = faiss.read_index(str(index_dir / f"{self.slug}.faiss"))
-        self.meta = _load_meta(index_dir, self.slug)
+        # ---- Metadata (eager, from JSON - no model loading) ----
+        self.meta = _load_json_meta(self.index_dir, self.slug)
         self.ids = self.meta["ids"]
         self.texts = self.meta["texts"]
         self.articles = self.meta["articles"]
@@ -82,19 +86,43 @@ class Retriever:
         self.titles = self.meta["titles"]
         self.id_to_pos = {cid: i for i, cid in enumerate(self.ids)}
 
+        # ---- FAISS index (lazy) ----
+        self.index = None
+        self._faiss_loaded = False
+
         # lazy models
         self._embed_model = None
         self._cross_encoder = None
 
+    # ---------------------------------------------------------------- FAISS (lazy)
+    def _ensure_faiss(self) -> None:
+        """Load FAISS index on first dense access."""
+        if self._faiss_loaded:
+            return
+        import faiss  # type: ignore
+        self.index = faiss.read_index(str(self.index_dir / f"{self.slug}.faiss"))
+        self._faiss_loaded = True
+
+    @property
+    def has_faiss(self) -> bool:
+        """True if FAISS index is available (requires faiss package)."""
+        try:
+            import faiss  # type: ignore
+            return True
+        except ImportError:
+            return False
+
     # ---------------------------------------------------------------- models
     @property
-    def embed_model(self) -> SentenceTransformer:
+    def embed_model(self):
+        from sentence_transformers import SentenceTransformer  # type: ignore
         if self._embed_model is None:
             self._embed_model = SentenceTransformer(self.model_name, device="cpu")
         return self._embed_model
 
     @property
-    def cross_encoder(self) -> CrossEncoder:
+    def cross_encoder(self):
+        from sentence_transformers import CrossEncoder  # type: ignore
         if self._cross_encoder is None:
             self._cross_encoder = CrossEncoder(
                 self.cfg["reranker"]["model"], device="cpu"
@@ -125,6 +153,9 @@ class Retriever:
         return results
 
     def dense_search(self, query: str, top_k: int = 10) -> list[dict]:
+        if not self.has_faiss:
+            raise ImportError("faiss-cpu not installed; dense retrieval unavailable")
+        self._ensure_faiss()
         q_emb = self.embed_model.encode(
             [query], convert_to_numpy=True, normalize_embeddings=True
         ).astype("float32")
@@ -137,7 +168,17 @@ class Retriever:
         return results
 
     def dense_best_score(self, query: str) -> float:
-        """Top cosine similarity (0..1) for the query — used as the abstention signal."""
+        """Top cosine similarity (0..1) for the query — used as abstention signal.
+
+        Falls back to best BM25 score if FAISS is unavailable.
+        """
+        if not self.has_faiss:
+            # BM25 fallback: normalize best score to [0, 1] roughly
+            tokenized = _tokenize(query)
+            scores = self.bm25.get_scores(tokenized)
+            best = float(scores.max()) if len(scores) else 0.0
+            return min(best / 10.0, 1.0)  # rough normalization
+        self._ensure_faiss()
         q_emb = self.embed_model.encode(
             [query], convert_to_numpy=True, normalize_embeddings=True
         ).astype("float32")
@@ -147,12 +188,14 @@ class Retriever:
     def hybrid_search(self, query: str, top_k: int = 10,
                       rrf_k: Optional[int] = None) -> list[dict]:
         """Reciprocal Rank Fusion of BM25 and dense rankings."""
+        if not self.has_faiss:
+            # BM25-only fallback
+            return self.bm25_search(query, top_k)
         if rrf_k is None:
             rrf_k = self.cfg["retrieval"]["rrf_k"]
         bm25_res = self.bm25_search(query, top_k=top_k * 3)
         dense_res = self.dense_search(query, top_k=top_k * 3)
 
-        # rank maps: chunk_id -> rank position (1-based)
         bm25_rank = {r["chunk_id"]: i + 1 for i, r in enumerate(bm25_res)}
         dense_rank = {r["chunk_id"]: i + 1 for i, r in enumerate(dense_res)}
 
@@ -165,7 +208,6 @@ class Retriever:
                 score += 1.0 / (rrf_k + dense_rank[cid])
             fused[cid] = score
 
-        # build result objects (text/meta from meta store)
         meta_by_id = {cid: i for i, cid in enumerate(self.ids)}
         ranked = sorted(fused.items(), key=lambda x: x[1], reverse=True)[:top_k]
         results = []
@@ -185,6 +227,8 @@ class Retriever:
 
     def rerank(self, query: str, candidates: list[dict]) -> list[dict]:
         """Cross-encoder rescore: take top-20, return top-5."""
+        if not self.has_faiss:
+            return candidates[: self.cfg["reranker"]["final_top_n"]]
         cfg = self.cfg["reranker"]
         top_n = cfg["rerank_top_n"]
         final_n = cfg["final_top_n"]
@@ -195,13 +239,14 @@ class Retriever:
         ce_scores = self.cross_encoder.predict(pairs)
         for c, s in zip(pool, ce_scores):
             c["ce_score"] = float(s)
-            c["score"] = float(s)  # replace with cross-encoder score
+            c["score"] = float(s)
         pool.sort(key=lambda x: x["score"], reverse=True)
         for i, c in enumerate(pool[:final_n], start=1):
             c["rank"] = i
         return pool[:final_n]
 
 
+# ---------------------------------------------------------------- helpers
 def best_score(candidates: list[dict]) -> float:
     """Highest score among candidates (after reranking if applied)."""
     if not candidates:
@@ -220,12 +265,8 @@ def cited_articles_in_text(text: str) -> list[str]:
     return sorted(set(re.findall(r"\[Article\s+([0-9A-Za-z]+)\]", text, re.IGNORECASE)))
 
 
-def verify_citations(answer: str, retrieved: list[dict]) -> tuple[list[str], list[str]]:
-    """Return (valid_cited, flagged_not_retrieved).
-
-    Every [Article N] in the answer must appear in at least one retrieved
-    passage; otherwise it is flagged.
-    """
+def verify_citations(answer: str, retrieved: list[dict]) -> tuple:
+    """Return (valid_cited, flagged_not_retrieved)."""
     retrieved_arts = set()
     for c in retrieved:
         retrieved_arts.update(str(a) for a in c["articles"])
