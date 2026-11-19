@@ -316,7 +316,7 @@ st.markdown('<div class="app-subtitle">Answers only from the indexed Constitutio
 
 def api_get(path: str, timeout: int = 10):
     try:
-        return requests.get(f"{BACKEND_URL}{path}", timeout=timeout)
+        return requests.get(f"{BACKEND_URL}{path}", timeout=timeout), None
     except Exception as exc:  # pragma: no cover - network
         return None, str(exc)
 
