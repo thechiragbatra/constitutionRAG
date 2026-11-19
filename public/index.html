@@ -958,6 +958,13 @@
       if (data) {
         contentArea.innerHTML = renderContent(data);
         showToast(data.abstained ? 'Answer not found in Constitution' : 'Answer ready', data.abstained ? 'info' : 'success');
+      } else {
+        contentArea.innerHTML = `
+          <div class="banner abstain">
+            <span class="icon">⚠️</span>
+            <span>Backend request failed. Check the toast error above.</span>
+          </div>
+        `;
       }
     });
 
