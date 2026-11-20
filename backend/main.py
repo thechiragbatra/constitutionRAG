@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +48,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---- Serve static frontend (public/) and API from one process ----
+PUBLIC_DIR = ROOT / "public"
+app.mount("/static", StaticFiles(directory=str(PUBLIC_DIR)), name="static")
+
+
+@app.get("/", response_class=FileResponse)
+def frontend_root() -> FileResponse:
+    """Serve the Streamlit-style HTML frontend at root."""
+    return FileResponse(str(PUBLIC_DIR / "index.html"))
 
 # ---- in-memory article index for exact lookup ----
 ARTICLES: Dict[str, List[dict]] = {}
