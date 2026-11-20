@@ -1,28 +1,35 @@
 # Core
-numpy
-PyYAML
-pydantic
-nltk
+numpy==1.26.4
+PyYAML==6.0.1
+pydantic==2.9.2
+nltk==3.8.1
+
+# PDF parsing (required by src/parse.py)
+pymupdf==1.24.5
 
 # Indexing / retrieval
-rank-bm25
-faiss-cpu
-sentence-transformers
+rank-bm25==0.2.2
+faiss-cpu==1.8.0
+sentence-transformers==3.0.1
 
 # Generation / backend
-fastapi
-uvicorn
-python-multipart
-transformers
-torch
-mangum
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+transformers==4.41.2
+torch==2.3.1
+requests==2.32.3
+mangum==0.17.0
 
 # Frontend
-streamlit
+streamlit==1.35.0
 
 # Evaluation / testing
-pytest
-rouge-score
-scikit-learn
-matplotlib
-pandas
+pytest==8.2.2
+rouge-score==0.1.2
+scikit-learn==1.5.0
+matplotlib==3.9.0
+pandas==2.2.2
+
+# Environment
+python-dotenv==1.0.1

@@ -7,3 +7,10 @@ __pycache__/
 results/
 .secrets/
 .streamlit/secrets.toml
+
+# Large ML index files - rebuild locally with: python src/index.py
+# (Processed data and indexes should be regenerated from constitution.pdf)
+data/indexes/
+
+# Optional: uncomment to ignore processed data (if you want users to rebuild from PDF)
+# data/processed/

@@ -11,6 +11,75 @@ Designed so both team members can open any file and explain every design choice.
 
 ---
 
+## Quick Start
+
+### 1. Clone and Install Dependencies
+
+```bash
+git clone https://github.com/thechiragbatra/constitutionRAG.git
+cd constitutionRAG
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Setup Environment
+
+```bash
+# Copy environment template
+cp .env.example .env
+
+# Edit .env if you want to use an API-based LLM (optional)
+# The system works fully with llm_mode=none (extractive fallback)
+```
+
+### 3. Prepare Data & Build Indexes
+
+**Option A: If you have processed data already** (included in repo):
+```bash
+# Build indexes from existing processed data
+python src/index.py
+```
+
+**Option B: Starting from PDF** (if you have constitution.pdf):
+```bash
+# Place your PDF in data/raw/
+# Then run the full pipeline:
+python src/parse.py      # PDF → clean.txt
+python src/chunk.py      # clean.txt → articles.jsonl + chunks
+python src/index.py      # Build BM25 + FAISS indexes
+```
+
+### 4. Verify Setup
+
+```bash
+python setup_check.py
+```
+
+This will validate all dependencies, data files, and indexes are ready.
+
+### 5. Run the Application
+
+**Terminal 1 — Start Backend:**
+```bash
+uvicorn backend.main:app --reload --port 8000
+```
+
+**Terminal 2 — Start Frontend:**
+```bash
+streamlit run app.py
+```
+
+Open http://localhost:8501 in your browser.
+
+### 6. Run Tests (Optional)
+
+```bash
+pytest tests/ -v
+```
+
+---
+
 ## Project structure
 
 ```
