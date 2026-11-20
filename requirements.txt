@@ -4,9 +4,6 @@ PyYAML==6.0.1
 pydantic==2.9.2
 nltk==3.8.1
 
-# PDF parsing (required by src/parse.py)
-pymupdf==1.24.5
-
 # Indexing / retrieval
 rank-bm25==0.2.2
 faiss-cpu==1.8.0
